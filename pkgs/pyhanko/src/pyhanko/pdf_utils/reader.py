@@ -1094,6 +1094,15 @@ class HistoricalResolver(PdfHandler):
 
         collected = defaultdict(set)
 
+        def _is_page_tree_edge(path: misc.ConsList[Union[str, int]]) -> bool:
+            # /Root /Pages: the root of the page tree
+            if path.head == '/Pages' and path.tail == misc.ConsList.sing(
+                '/Root'
+            ):
+                return True
+            # ... /Kids <index>: a child of a page tree node
+            return path.tail is not None and path.tail.head == '/Kids'
+
         # internally, _compute_paths_to_refs works with singly linked lists
         # to avoid having to create & destroy lots of list objects
         # We flatten everything when we're done
@@ -1102,7 +1111,6 @@ class HistoricalResolver(PdfHandler):
             cur_path: misc.ConsList[Union[str, int]],
             seen_in_path: misc.ConsList[generic.Reference],
             *,
-            is_page_tree,
             page_tree_objs,
             is_struct_tree,
             struct_tree_objs,
@@ -1126,7 +1134,13 @@ class HistoricalResolver(PdfHandler):
                 collected[obj_ref].add(cur_path)
                 seen_in_path = seen_in_path.cons(obj_ref)
                 obj = self(obj_ref)
-                if not is_page_tree and obj_ref in page_tree_objs:
+                # Only enter the page tree along its own edges. Following
+                # other references into it (e.g. link destinations on pages
+                # that point to other pages) blows up the number of paths
+                # combinatorially in documents with many cross-page links.
+                if obj_ref in page_tree_objs and not _is_page_tree_edge(
+                    cur_path
+                ):
                     return
                 if not is_struct_tree and obj_ref in struct_tree_objs:
                     return
@@ -1141,12 +1155,6 @@ class HistoricalResolver(PdfHandler):
                         v,
                         cur_path.cons(k),
                         seen_in_path,
-                        is_page_tree=is_page_tree
-                        or (
-                            cur_path.head == '/Root'
-                            and k == '/Pages'
-                            and cur_path.tail == misc.ConsList.empty()
-                        ),
                         page_tree_objs=page_tree_objs,
                         # for the struct tree: we definitely want to
                         # consider the /ParentTree as an "external" feature
@@ -1169,7 +1177,6 @@ class HistoricalResolver(PdfHandler):
                         v,
                         cur_path.cons(ix),
                         seen_in_path,
-                        is_page_tree=is_page_tree,
                         page_tree_objs=page_tree_objs,
                         is_struct_tree=is_struct_tree,
                         struct_tree_objs=struct_tree_objs,
@@ -1241,7 +1248,6 @@ class HistoricalResolver(PdfHandler):
             self.trailer_view,
             misc.ConsList.empty(),
             misc.ConsList.empty(),
-            is_page_tree=False,
             page_tree_objs=page_tree_nodes,
             is_struct_tree=False,
             struct_tree_objs=struct_tree_nodes,
